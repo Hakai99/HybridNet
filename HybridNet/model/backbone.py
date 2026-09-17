@@ -6,7 +6,7 @@ LiteHybridNet Backbone with Context Attention Block (CAB)
 Architecture:
     Input → Stem → Stage1 → Stage2(P3) → Stage3+CAB(P4) → Stage4+CAB(P5)
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import torch
