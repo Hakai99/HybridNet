@@ -11,7 +11,7 @@ Reads:
 YOLO annotation format (per line):
     class_id cx cy w h   (all normalized 0-1)
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import os
