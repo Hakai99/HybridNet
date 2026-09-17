@@ -9,7 +9,7 @@ Includes:
     - Color palette for visualization
     - Checkpoint helpers
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import torch
