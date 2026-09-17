@@ -125,7 +125,7 @@ python export.py --weights runs/exp/best.pt --format tflite --int8 --data datase
 
 ---
 
-## 🖥️ Train on Google Colab
+##  Train on Google Colab
 
 ```python
 # Clone repo
@@ -148,7 +148,7 @@ python export.py --weights runs/exp/best.pt --format tflite --int8 --data datase
 
 ---
 
-## 📊 Model Stats
+##  Model Stats
 
 | Property | Value |
 |---|---|
@@ -162,7 +162,7 @@ python export.py --weights runs/exp/best.pt --format tflite --int8 --data datase
 
 ---
 
-## 📱 Mobile Deployment
+##  Mobile Deployment
 
 After exporting to TFLite:
 - Input: `float32 [1, 640, 640, 3]` normalized 0–1
@@ -171,6 +171,6 @@ After exporting to TFLite:
 
 ---
 
-## 📄 License
+##  License
 
 MIT License — free to use for research and commercial projects.
