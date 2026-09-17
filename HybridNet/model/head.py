@@ -10,7 +10,7 @@ Predicts on 3 scales (small / medium / large objects):
 
 No anchors needed — clean, modern, research-friendly.
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import torch
