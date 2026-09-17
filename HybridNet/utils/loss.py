@@ -13,7 +13,7 @@ YOUR NOVELTY:
     They use uncertainty weighting — learned during training!
     The model itself figures out how much each loss matters.
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import torch
