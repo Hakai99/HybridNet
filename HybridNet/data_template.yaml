@@ -1,0 +1,14 @@
+# HybridNet data.yaml template
+# Replace with your actual dataset paths and class names
+
+train: images/train
+val:   images/val
+
+# Number of classes
+nc: 3
+
+# Class names (must match nc)
+names:
+  - cat
+  - dog
+  - person
