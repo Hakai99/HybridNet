@@ -16,7 +16,7 @@ Usage:
     # Webcam
     python detect.py --weights runs/exp1/best.pt --source 0
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import os
