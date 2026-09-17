@@ -6,7 +6,7 @@ Validation & mAP Evaluation Script
 Usage:
     python val.py --weights runs/exp1/best.pt --data data.yaml
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import torch
