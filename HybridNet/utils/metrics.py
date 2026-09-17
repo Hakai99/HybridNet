@@ -8,7 +8,7 @@ Computes:
     - mAP@0.5
     - mAP@0.5:0.95 (COCO style)
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import torch
