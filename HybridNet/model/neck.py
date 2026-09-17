@@ -13,7 +13,7 @@ Flow:
     P4(40x40x256) ─┼─→ AdaFPN ─→ out3, out4, out5
     P5(20x20x512) ─┘
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import torch
