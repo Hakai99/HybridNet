@@ -1,10 +1,10 @@
-# HybridNet 🔍
+# HybridNet 
 
 > A novel lightweight anchor-free object detector optimized for mobile deployment (TFLite), trained on YOLO-format datasets.
 
 ---
 
-## ✨ Novel Contributions
+##  Novel Contributions
 
 | Module | Novelty |
 |---|---|
@@ -14,7 +14,7 @@
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 ```
 Input (640×640)
@@ -33,7 +33,7 @@ Boxes + Classes + Centerness
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 HybridNet/
@@ -57,7 +57,7 @@ HybridNet/
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### 1. Install
 ```bash
@@ -66,7 +66,7 @@ cd HybridNet
 pip install -r requirements.txt
 ```
 
-### 2. Prepare Dataset (YOLO format)
+### 2. Prepare Dataset 
 ```
 dataset/
 ├── data.yaml
