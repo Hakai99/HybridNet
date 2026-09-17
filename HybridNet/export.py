@@ -17,7 +17,7 @@ Usage:
     # Export to TFLite INT8 (quantized — best for mobile)
     python export.py --weights runs/exp1/best.pt --format tflite --int8 --data data.yaml
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import os
