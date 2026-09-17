@@ -12,7 +12,7 @@ Usage:
     model = HybridNet(num_classes=80)
     preds = model(images)
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import torch
