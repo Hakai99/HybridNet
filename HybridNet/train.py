@@ -12,7 +12,7 @@ Supports:
     - Training log
     - Any YOLO-format dataset
 
-Author: Your Name
+Author: Dev Kr Lahkar
 """
 
 import os
