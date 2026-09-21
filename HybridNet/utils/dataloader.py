@@ -59,10 +59,12 @@ class YOLODataset(Dataset):
         # Load image
         img = cv2.imread(str(img_path))
         if img is None:
-            # Return blank image if load fails
             img = np.zeros((self.img_size, self.img_size, 3), dtype=np.uint8)
         else:
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+ 
+        # Save original size BEFORE letterbox ← FIX
+        orig_h, orig_w = img.shape[:2]
  
         # Load labels
         label_path = self.label_dir / (img_path.stem + '.txt')
@@ -79,19 +81,23 @@ class YOLODataset(Dataset):
  
         labels = np.array(labels, dtype=np.float32) if labels else np.zeros((0, 5), dtype=np.float32)
  
-        # Augmentation
+        # Augmentation (before letterbox)
         if self.augment:
             img, labels = self._augment(img, labels)
  
         # Resize with letterbox
         img, ratio, pad = self._letterbox(img, self.img_size)
  
-        # Adjust labels
+        # Fix label coords for letterbox ← FIX
         if labels.shape[0] > 0:
-            labels[:, 1] = ratio * labels[:, 1] * img.shape[1] / self.img_size + pad[0] / self.img_size
-            labels[:, 2] = ratio * labels[:, 2] * img.shape[0] / self.img_size + pad[1] / self.img_size
-            labels[:, 3] = ratio * labels[:, 3]
-            labels[:, 4] = ratio * labels[:, 4]
+            # cx, cy adjusted for padding and ratio
+            labels[:, 1] = labels[:, 1] * ratio * orig_w / self.img_size + pad[0] / self.img_size
+            labels[:, 2] = labels[:, 2] * ratio * orig_h / self.img_size + pad[1] / self.img_size
+            # w, h adjusted for ratio
+            labels[:, 3] = labels[:, 3] * ratio * orig_w / self.img_size
+            labels[:, 4] = labels[:, 4] * ratio * orig_h / self.img_size
+            # Clamp all to valid range
+            labels[:, 1:] = labels[:, 1:].clip(0, 1)
  
         # To tensor
         img = img.astype(np.float32) / 255.0
@@ -115,10 +121,12 @@ class YOLODataset(Dataset):
         return img, ratio, (pad_w, pad_h)
  
     def _augment(self, img, labels):
+        # Horizontal flip
         if np.random.random() < 0.5:
             img = cv2.flip(img, 1)
             if labels.shape[0] > 0:
                 labels[:, 1] = 1 - labels[:, 1]
+        # HSV color jitter
         img = self._hsv_jitter(img, hgain=0.015, sgain=0.7, vgain=0.4)
         return img, labels
  
@@ -188,10 +196,12 @@ def build_dataloader(yaml_path, split='train', img_size=640, batch_size=16, work
         augment=augment
     )
  
-    # ── Colab-safe DataLoader settings ──────────────
+    # Colab-safe DataLoader settings
     # num_workers=0  → no multiprocessing (prevents freeze)
     # pin_memory=False → no CUDA pinning (prevents crash)
     # persistent_workers=False → safe for num_workers=0
+    # drop_last=False → use all images
+    # timeout=0 → no timeout issues
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
