@@ -6,7 +6,7 @@ HybridNet - utils/dataloader.py
 YOLO-Format Dataset & DataLoader
 Colab-compatible version (num_workers=0, pin_memory=False)
  
-Author: Your Name
+Author: Dev Kr Lahkar
 """
  
 import os
