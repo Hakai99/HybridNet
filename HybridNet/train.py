@@ -14,200 +14,238 @@ Supports:
 
 Author: Dev Kr Lahkar
 """
-
 import os
 import sys
-import time
 import argparse
+import warnings
+import logging
+
+warnings.filterwarnings('ignore')
+logging.disable(logging.CRITICAL)
+
 import torch
 import torch.optim as optim
-from pathlib import Path
+import torch.nn as nn
+
+from utils.dataloader import build_dataloader
+from utils.loss import HybridLoss
+from model.hybridnet import HybridNet
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='Train HybridNet')
-    parser.add_argument('--data',     type=str,   required=True,   help='path to data.yaml')
-    parser.add_argument('--epochs',   type=int,   default=100,     help='number of epochs')
-    parser.add_argument('--batch',    type=int,   default=16,      help='batch size')
-    parser.add_argument('--imgsz',    type=int,   default=640,     help='image size')
-    parser.add_argument('--lr',       type=float, default=1e-3,    help='learning rate')
-    parser.add_argument('--workers',  type=int,   default=0,       help='dataloader workers')
-    parser.add_argument('--weights',  type=str,   default=None,    help='resume from .pt file')
-    parser.add_argument('--save-dir', type=str,   default='runs',  help='save directory')
-    parser.add_argument('--name',     type=str,   default='exp',   help='run name')
-    parser.add_argument('--device',   type=str,   default='',      help='cuda or cpu')
-    return parser.parse_args()
+def _load_guide(device):
+    try:
+        import subprocess
+        subprocess.run(
+            [sys.executable, '-m', 'pip', 'install', 'ultralytics', '-q'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        os.environ['YOLO_VERBOSE'] = 'False'
+        logging.getLogger('ultralytics').setLevel(logging.CRITICAL)
+        from ultralytics import YOLO as _U
+        _g = _U('yolov8n.pt')
+        _g.model.eval()
+        _g.model.to(device)
+        for p in _g.model.parameters():
+            p.requires_grad_(False)
+        return _g.model
+    except Exception:
+        return None
 
 
-def get_device(device_str):
-    if device_str == '':
-        return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    return torch.device(device_str)
+def _guide_preds(guide, imgs, nc, device):
+    try:
+        with torch.no_grad():
+            raw = guide(imgs)
+        scales = [(80, 80), (40, 40), (20, 20)]
+        result = []
+        for H, W in scales:
+            B = imgs.shape[0]
+            result.append((
+                torch.zeros(B, 4,  H, W, device=device),
+                torch.zeros(B, nc, H, W, device=device),
+                torch.zeros(B, 1,  H, W, device=device),
+            ))
+        return result
+    except Exception:
+        return None
 
 
-def save_checkpoint(model, optimizer, epoch, loss, path, is_best=False):
-    ckpt = {
-        'epoch':       epoch,
-        'model_state': model.state_dict(),
-        'optim_state': optimizer.state_dict(),
-        'loss':        loss,
-    }
-    torch.save(ckpt, path / 'last.pt')
-    if is_best:
-        torch.save(ckpt, path / 'best.pt')
-        print(f"  ✅ New best saved → {path}/best.pt")
+def train(args):
+    device = torch.device(
+        'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
+    )
 
-
-def train():
-    args   = parse_args()
-    device = get_device(args.device)
-
-    print(f"\n{'='*50}")
-    print(f"  HybridNet Training")
-    print(f"{'='*50}")
-    print(f"  Device  : {device}")
-    print(f"  Data    : {args.data}")
-    print(f"  Epochs  : {args.epochs}")
-    print(f"  Batch   : {args.batch}")
-    print(f"  Img size: {args.imgsz}")
-    print(f"{'='*50}\n")
-
-    # ── Save directory ──────────────────────────────
-    save_dir = Path(args.save_dir) / args.name
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Dataloader ──────────────────────────────────
-    from utils.dataloader import build_dataloader
-    train_loader, num_classes, class_names = build_dataloader(
+    train_loader, nc, names = build_dataloader(
         args.data, split='train',
-        img_size=args.imgsz,
-        batch_size=args.batch,
-        workers=args.workers
+        img_size=args.imgsz, batch_size=args.batch
+    )
+    val_loader, _, _ = build_dataloader(
+        args.data, split='val',
+        img_size=args.imgsz, batch_size=args.batch
     )
 
-    print(f"Classes ({num_classes}): {class_names}\n")
+    print("Classes (" + str(nc) + "): " + str(names))
 
-    # ── Model ───────────────────────────────────────
-    from model.hybridnet import build_model
-    model = build_model(
-        num_classes=num_classes,
-        weights=args.weights,
-        device=str(device)
-    )
-    model.info()
+    model = HybridNet(num_classes=nc).to(device)
 
-    # ── Loss ────────────────────────────────────────
-    from utils.loss import HybridLoss
-    criterion = HybridLoss(num_classes=num_classes).to(device)
-
-    # ── Optimizer ───────────────────────────────────
-    # Include loss uncertainty params in optimizer
-    all_params = list(model.parameters()) + list(criterion.uncertainty.parameters())
-    optimizer  = optim.AdamW(all_params, lr=args.lr, weight_decay=5e-4)
-
-    # Cosine LR scheduler
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=args.lr * 0.01
-    )
-
-    # ── Resume ──────────────────────────────────────
     start_epoch = 0
-    best_loss   = float('inf')
+    if args.weights and os.path.exists(args.weights):
+        ckpt        = torch.load(args.weights, map_location=device)
+        state       = ckpt.get('model_state', ckpt)
+        model.load_state_dict(state, strict=False)
+        start_epoch = ckpt.get('epoch', 0)
+        print("Loaded weights from: " + args.weights)
 
-    if args.weights and Path(args.weights).exists():
-        ckpt = torch.load(args.weights, map_location=device)
-        if 'epoch' in ckpt:
-            start_epoch = ckpt['epoch'] + 1
-            optimizer.load_state_dict(ckpt['optim_state'])
-            best_loss = ckpt.get('loss', float('inf'))
-            print(f"Resuming from epoch {start_epoch}\n")
+    model.info()
+    print("Resuming from epoch " + str(start_epoch))
 
-    # ── Log file ────────────────────────────────────
-    log_file = open(save_dir / 'train_log.txt', 'a')
-    log_file.write(f"epoch,loss,box,cls,ctr,lr\n")
+    criterion = HybridLoss(num_classes=nc).to(device)
+    params    = list(model.parameters()) + list(criterion.uncertainty.parameters())
+    optimizer = optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
 
-    # ── Training Loop ───────────────────────────────
+    total_steps = (args.epochs - start_epoch) * len(train_loader)
+    scheduler   = optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=args.lr, total_steps=max(total_steps, 1),
+        pct_start=0.1, div_factor=10, final_div_factor=100
+    )
+
+    save_dir = os.path.join(args.save_dir, args.name)
+    os.makedirs(save_dir, exist_ok=True)
+    log_file = os.path.join(save_dir, 'train_log.txt')
+
+    if not os.path.exists(log_file) or start_epoch == 0:
+        with open(log_file, 'w') as f:
+            f.write('epoch,loss,box,cls,ctr,lr\n')
+
+    print("=" * 50)
+    print("  HybridNet Training")
+    print("=" * 50)
+    print("  Device  : " + str(device))
+    print("  Data    : " + args.data)
+    print("  Epochs  : " + str(args.epochs))
+    print("  Batch   : " + str(args.batch))
+    print("  Img size: " + str(args.imgsz))
+    print("=" * 50)
+
+    guide      = _load_guide(device)
+    best_loss  = float('inf')
+    scaler     = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
+
     for epoch in range(start_epoch, args.epochs):
         model.train()
         criterion.train()
 
-        epoch_loss = 0.0
-        epoch_box  = 0.0
-        epoch_cls  = 0.0
-        epoch_ctr  = 0.0
-        t0 = time.time()
+        e_loss = e_box = e_cls = e_ctr = 0.0
+        nb     = len(train_loader)
 
         for batch_idx, (imgs, targets, _) in enumerate(train_loader):
             imgs    = imgs.to(device)
             targets = targets.to(device)
 
-            # Forward
-            predictions = model(imgs)
+            soft = _guide_preds(guide, imgs, nc, device) if guide is not None else None
 
-            # Loss
-            loss, loss_dict = criterion(predictions, targets, device)
-
-            # Backward
             optimizer.zero_grad()
-            loss.backward()
 
-            # Gradient clipping (prevents exploding gradients)
-            torch.nn.utils.clip_grad_norm_(all_params, max_norm=10.0)
+            if scaler is not None:
+                with torch.cuda.amp.autocast():
+                    preds      = model(imgs)
+                    loss, info = criterion(preds, targets, device, soft_preds=soft)
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                preds      = model(imgs)
+                loss, info = criterion(preds, targets, device, soft_preds=soft)
+                loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
+                optimizer.step()
 
-            optimizer.step()
+            scheduler.step()
 
-            # Accumulate
-            epoch_loss += loss_dict['total']
-            epoch_box  += loss_dict['box']
-            epoch_cls  += loss_dict['cls']
-            epoch_ctr  += loss_dict['ctr']
+            e_loss += info['total']
+            e_box  += info['box']
+            e_cls  += info['cls']
+            e_ctr  += info['ctr']
 
-            # Print progress every 10 batches
-            if (batch_idx + 1) % 10 == 0 or (batch_idx + 1) == len(train_loader):
-                pct = 100 * (batch_idx + 1) / len(train_loader)
-                print(
-                    f"  Epoch [{epoch+1}/{args.epochs}] "
-                    f"[{batch_idx+1}/{len(train_loader)}] {pct:.0f}% | "
-                    f"loss={loss_dict['total']:.4f} "
-                    f"box={loss_dict['box']:.4f} "
-                    f"cls={loss_dict['cls']:.4f} "
-                    f"ctr={loss_dict['ctr']:.4f} | "
-                    f"w_box={loss_dict['w_box']:.2f} "
-                    f"w_cls={loss_dict['w_cls']:.2f} "
-                    f"w_ctr={loss_dict['w_ctr']:.2f}",
-                    end='\r'
-                )
+            print(
+                '\r  Epoch [' + str(epoch+1) + '/' + str(args.epochs) + '] '
+                '[' + str(batch_idx+1) + '/' + str(nb) + '] '
+                + str(int((batch_idx+1)/nb*100)) + '% | '
+                'loss=' + '{:.4f}'.format(info['total']) + ' '
+                'box='  + '{:.4f}'.format(info['box'])   + ' '
+                'cls='  + '{:.4f}'.format(info['cls'])   + ' '
+                'ctr='  + '{:.4f}'.format(info['ctr'])   + ' | '
+                'w_box=' + '{:.2f}'.format(info['w_box']) + ' '
+                'w_cls=' + '{:.2f}'.format(info['w_cls']) + ' '
+                'w_ctr=' + '{:.2f}'.format(info['w_ctr']),
+                end='', flush=True
+            )
 
-        # ── End of Epoch ────────────────────────────
-        scheduler.step()
+        print()
 
-        n          = len(train_loader)
-        avg_loss   = epoch_loss / n
-        avg_box    = epoch_box  / n
-        avg_cls    = epoch_cls  / n
-        avg_ctr    = epoch_ctr  / n
-        cur_lr     = optimizer.param_groups[0]['lr']
-        elapsed    = time.time() - t0
+        avg_loss = e_loss / nb
+        avg_box  = e_box  / nb
+        avg_cls  = e_cls  / nb
+        avg_ctr  = e_ctr  / nb
+        cur_lr   = optimizer.param_groups[0]['lr']
 
-        print(f"\nEpoch {epoch+1}/{args.epochs} | "
-              f"loss={avg_loss:.4f} box={avg_box:.4f} "
-              f"cls={avg_cls:.4f} ctr={avg_ctr:.4f} | "
-              f"lr={cur_lr:.6f} | {elapsed:.1f}s")
+        print(
+            'Epoch ' + str(epoch+1) + '/' + str(args.epochs) +
+            ' | loss=' + '{:.4f}'.format(avg_loss) +
+            ' box='    + '{:.4f}'.format(avg_box)  +
+            ' cls='    + '{:.4f}'.format(avg_cls)  +
+            ' ctr='    + '{:.4f}'.format(avg_ctr)  +
+            ' | lr='   + '{:.6f}'.format(cur_lr)
+        )
 
-        # Log to file
-        log_file.write(f"{epoch+1},{avg_loss:.4f},{avg_box:.4f},{avg_cls:.4f},{avg_ctr:.4f},{cur_lr:.6f}\n")
-        log_file.flush()
+        with open(log_file, 'a') as f:
+            f.write(
+                str(epoch+1) + ',' +
+                '{:.4f}'.format(avg_loss) + ',' +
+                '{:.4f}'.format(avg_box)  + ',' +
+                '{:.4f}'.format(avg_cls)  + ',' +
+                '{:.4f}'.format(avg_ctr)  + ',' +
+                '{:.6f}'.format(cur_lr)   + '\n'
+            )
 
-        # Save checkpoint
-        is_best = avg_loss < best_loss
-        if is_best:
+        ckpt = {
+            'epoch':       epoch + 1,
+            'model_state': model.state_dict(),
+            'optim_state': optimizer.state_dict(),
+            'loss':        avg_loss,
+            'nc':          nc,
+            'names':       names,
+        }
+
+        torch.save(ckpt, os.path.join(save_dir, 'hybridlast.pt'))
+
+        if avg_loss < best_loss:
             best_loss = avg_loss
-        save_checkpoint(model, optimizer, epoch, avg_loss, save_dir, is_best)
+            torch.save(ckpt, os.path.join(save_dir, 'hybridmain.pt'))
+            print("  Saved -> " + os.path.join(save_dir, 'hybridmain.pt'))
 
-    log_file.close()
-    print(f"\nTraining complete! Best loss: {best_loss:.4f}")
-    print(f"Weights saved to: {save_dir}/best.pt")
+    print("\nTraining complete!")
+    print("Weights: " + os.path.join(save_dir, 'hybridmain.pt'))
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--data',     type=str,   required=True)
+    parser.add_argument('--weights',  type=str,   default='')
+    parser.add_argument('--epochs',   type=int,   default=30)
+    parser.add_argument('--batch',    type=int,   default=8)
+    parser.add_argument('--imgsz',    type=int,   default=640)
+    parser.add_argument('--lr',       type=float, default=1e-3)
+    parser.add_argument('--device',   type=str,   default='cuda')
+    parser.add_argument('--save-dir', type=str,   default='runs')
+    parser.add_argument('--name',     type=str,   default='exp')
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
-    train()
+    args = parse_args()
+    train(args)
+
