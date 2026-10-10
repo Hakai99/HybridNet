@@ -175,7 +175,7 @@ print("Forward pass OK!")
 > Weights: `hybridmain.pt` (best) and `hybridlast.pt` (latest).
 
 ```python
-import os, sys, time, torch, ipywidgets as widgets
+import os, sys, time, torch, subprocess, ipywidgets as widgets
 from IPython.display import display
 
 os.chdir('/content/HybridNet/HybridNet')
@@ -184,8 +184,8 @@ sys.path.insert(0, '/content/HybridNet/HybridNet')
 DATASET_PATH    = '/content/drive/MyDrive/hybrid_test'   # ← CHANGE THIS
 SAVE_DIR        = '/content/drive/MyDrive/HybridNet_runs'
 RUN_NAME        = 'run_v1'
-EPOCHS_PER_UNIT = 10
-TOTAL_TARGET    = 200
+EPOCHS_PER_UNIT = 20
+TOTAL_TARGET    = 800
 BATCH           = 8
 IMG_SIZE        = 640
 
@@ -212,19 +212,23 @@ def train_unit(to_epoch):
     print("\n" + "="*50)
     print("Training to epoch " + str(to_epoch))
     print("="*50 + "\n")
-    base = (
-        'python train.py'
-        ' --data '    + DATA_YAML +
-        ' --epochs '  + str(to_epoch) +
-        ' --batch '   + str(BATCH) +
-        ' --imgsz '   + str(IMG_SIZE) +
-        ' --device cuda'
-        ' --save-dir ' + SAVE_DIR +
-        ' --name '    + RUN_NAME
-    )
+    cmd = [
+        'python', 'train.py',
+        '--data',     DATA_YAML,
+        '--epochs',   str(to_epoch),
+        '--batch',    str(BATCH),
+        '--imgsz',    str(IMG_SIZE),
+        '--device',   'cuda',
+        '--save-dir', SAVE_DIR,
+        '--name',     RUN_NAME
+    ]
     if os.path.exists(LAST_PT):
-        base += ' --weights ' + LAST_PT
-    os.system(base)
+        cmd += ['--weights', LAST_PT]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, cwd='/content/HybridNet/HybridNet')
+    for line in proc.stdout:
+        print(line, end='', flush=True)
+    proc.wait()
 
 def show_popup(current_epoch):
     print("\n" + "="*50)
