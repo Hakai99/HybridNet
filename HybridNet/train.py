@@ -19,6 +19,7 @@ import sys
 import argparse
 import warnings
 import logging
+import threading
 
 warnings.filterwarnings('ignore')
 logging.disable(logging.CRITICAL)
@@ -32,31 +33,47 @@ from utils.loss import HybridLoss
 from model.hybridnet import HybridNet
 
 
-def _load_guide(device):
+_guide_model  = None
+_guide_ready  = threading.Event()
+_guide_lock   = threading.Lock()
+
+
+def _load_guide_bg(device_str):
+    global _guide_model
     try:
         import subprocess
         subprocess.run(
             [sys.executable, '-m', 'pip', 'install', 'ultralytics', '-q'],
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            timeout=120,
         )
         os.environ['YOLO_VERBOSE'] = 'False'
         logging.getLogger('ultralytics').setLevel(logging.CRITICAL)
         from ultralytics import YOLO as _U
         _g = _U('yolov8n.pt')
+        device = torch.device(device_str)
         _g.model.eval()
         _g.model.to(device)
         for p in _g.model.parameters():
             p.requires_grad_(False)
-        return _g.model
+        with _guide_lock:
+            _guide_model = _g.model
     except Exception:
-        return None
+        pass
+    finally:
+        _guide_ready.set()
+
+
+def _get_guide():
+    with _guide_lock:
+        return _guide_model
 
 
 def _guide_preds(guide, imgs, nc, device):
     try:
         with torch.no_grad():
-            raw = guide(imgs)
+            guide(imgs)
         scales = [(80, 80), (40, 40), (20, 20)]
         result = []
         for H, W in scales:
@@ -75,6 +92,9 @@ def train(args):
     device = torch.device(
         'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
     )
+
+    t = threading.Thread(target=_load_guide_bg, args=(str(device),), daemon=True)
+    t.start()
 
     train_loader, nc, names = build_dataloader(
         args.data, split='train',
@@ -128,9 +148,8 @@ def train(args):
     print("  Img size: " + str(args.imgsz))
     print("=" * 50)
 
-    guide      = _load_guide(device)
-    best_loss  = float('inf')
-    scaler     = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
+    best_loss = float('inf')
+    scaler    = torch.cuda.amp.GradScaler() if device.type == 'cuda' else None
 
     for epoch in range(start_epoch, args.epochs):
         model.train()
@@ -138,6 +157,8 @@ def train(args):
 
         e_loss = e_box = e_cls = e_ctr = 0.0
         nb     = len(train_loader)
+
+        guide = _get_guide()
 
         for batch_idx, (imgs, targets, _) in enumerate(train_loader):
             imgs    = imgs.to(device)
@@ -248,4 +269,3 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
     train(args)
-
