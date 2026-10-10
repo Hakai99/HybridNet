@@ -184,8 +184,8 @@ sys.path.insert(0, '/content/HybridNet/HybridNet')
 DATASET_PATH    = '/content/drive/MyDrive/hybrid_test'   # ← CHANGE THIS
 SAVE_DIR        = '/content/drive/MyDrive/HybridNet_runs'
 RUN_NAME        = 'run_v1'
-EPOCHS_PER_UNIT = 20
-TOTAL_TARGET    = 800
+EPOCHS_PER_UNIT = 10
+TOTAL_TARGET    = 200
 BATCH           = 8
 IMG_SIZE        = 640
 
@@ -290,8 +290,8 @@ sys.path.insert(0, '/content/HybridNet/HybridNet')
 DATASET_PATH    = '/content/drive/MyDrive/hybrid_test'   # ← CHANGE THIS
 SAVE_DIR        = '/content/drive/MyDrive/HybridNet_runs'
 RUN_NAME        = 'run_v1'
-EPOCHS_PER_UNIT = 20
-TOTAL_TARGET    = 800
+EPOCHS_PER_UNIT = 10
+TOTAL_TARGET    = 200
 BATCH           = 8
 IMG_SIZE        = 640
 
