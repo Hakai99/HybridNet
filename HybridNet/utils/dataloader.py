@@ -7,7 +7,6 @@ Colab-compatible version (num_workers=0, pin_memory=False)
  
 Author: Dev Kr Lahkar
 """
- 
 import os
 import cv2
 import yaml
