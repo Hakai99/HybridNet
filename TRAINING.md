@@ -281,7 +281,7 @@ else:
 > Run Cells 1–4 first, then run this cell.
 
 ```python
-import os, sys, time, torch, ipywidgets as widgets
+import os, sys, time, torch, subprocess, ipywidgets as widgets
 from IPython.display import display
 
 os.chdir('/content/HybridNet/HybridNet')
@@ -290,8 +290,8 @@ sys.path.insert(0, '/content/HybridNet/HybridNet')
 DATASET_PATH    = '/content/drive/MyDrive/hybrid_test'   # ← CHANGE THIS
 SAVE_DIR        = '/content/drive/MyDrive/HybridNet_runs'
 RUN_NAME        = 'run_v1'
-EPOCHS_PER_UNIT = 10
-TOTAL_TARGET    = 200
+EPOCHS_PER_UNIT = 20
+TOTAL_TARGET    = 800
 BATCH           = 8
 IMG_SIZE        = 640
 
@@ -313,18 +313,22 @@ def get_current_epoch():
         return 0
 
 def train_unit(to_epoch):
-    cmd = (
-        'python train.py'
-        ' --data '     + DATA_YAML +
-        ' --weights '  + LAST_PT +
-        ' --epochs '   + str(to_epoch) +
-        ' --batch '    + str(BATCH) +
-        ' --imgsz '    + str(IMG_SIZE) +
-        ' --device cuda'
-        ' --save-dir ' + SAVE_DIR +
-        ' --name '     + RUN_NAME
-    )
-    os.system(cmd)
+    cmd = [
+        'python', 'train.py',
+        '--data',     DATA_YAML,
+        '--weights',  LAST_PT,
+        '--epochs',   str(to_epoch),
+        '--batch',    str(BATCH),
+        '--imgsz',    str(IMG_SIZE),
+        '--device',   'cuda',
+        '--save-dir', SAVE_DIR,
+        '--name',     RUN_NAME
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, cwd='/content/HybridNet/HybridNet')
+    for line in proc.stdout:
+        print(line, end='', flush=True)
+    proc.wait()
 
 def show_popup(current_epoch):
     print("\n" + "="*50)
@@ -409,7 +413,7 @@ print("=" * 45)
 ## Cell 10 — Validate (mAP Score)
 
 ```python
-import os
+import os, subprocess
 os.chdir('/content/HybridNet/HybridNet')
 
 BEST_PT   = '/content/drive/MyDrive/HybridNet_runs/run_v1/hybridmain.pt'
@@ -418,12 +422,14 @@ DATA_YAML = '/content/drive/MyDrive/hybrid_test/data.yaml'   # ← CHANGE THIS
 if not os.path.exists(BEST_PT):
     print("hybridmain.pt not found!")
 else:
-    os.system(
-        'python val.py'
-        ' --weights ' + BEST_PT +
-        ' --data '    + DATA_YAML +
-        ' --batch 8'
+    proc = subprocess.Popen(
+        ['python', 'val.py', '--weights', BEST_PT, '--data', DATA_YAML, '--batch', '8'],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, cwd='/content/HybridNet/HybridNet'
     )
+    for line in proc.stdout:
+        print(line, end='', flush=True)
+    proc.wait()
 ```
 
 ---
