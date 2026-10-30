@@ -45,12 +45,27 @@ def validate():
     print(f"  Device : {device}\n")
 
     # ── Model ───────────────────────────────────────
-    from model.hybridnet import build_model
-    ckpt = torch.load(args.weights, map_location=device)
-    num_classes = ckpt.get('num_classes', 80)
-    model = build_model(num_classes=num_classes, weights=args.weights, device=str(device))
-    model.eval()
+# ── Model ───────────────────────────────────────
+from model.hybridnet import build_model
+from utils.dataloader import build_dataloader
 
+# Load validation dataset and get actual class count
+val_loader, nc, class_names = build_dataloader(
+    args.data,
+    split='val',
+    img_size=args.imgsz,
+    batch_size=args.batch,
+    workers=0
+)
+
+num_classes = nc
+
+model = build_model(
+    num_classes=num_classes,
+    weights=args.weights,
+    device=str(device)
+)
+model.eval()
     # ── Dataloader ──────────────────────────────────
     from utils.dataloader import build_dataloader
     val_loader, nc, class_names = build_dataloader(
