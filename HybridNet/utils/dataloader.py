@@ -128,7 +128,7 @@ def build_dataloader(yaml_path, split='train', img_size=640, batch_size=16, work
         dataset,
         batch_size=batch_size,
         shuffle=(split == 'train'),
-        num_workers=2,
+        num_workers=workers,
         pin_memory=True,
         collate_fn=collate_fn,
         drop_last=False,
@@ -137,3 +137,4 @@ def build_dataloader(yaml_path, split='train', img_size=640, batch_size=16, work
     )
 
     return loader, data['nc'], data['names']
+
