@@ -17,30 +17,57 @@ from utils.loss import HybridLoss
 from model.hybridnet import HybridNet
 
 
-GUIDE_PT = '/content/drive/MyDrive/yolov8n.pt'
+GUIDE_PT = '/content/drive/MyDrive/yolov8n.pt'   # set to '' to disable the guide
 
 _guide_model = None
+_guide_map   = None      # (student_idx, teacher_idx) LongTensors for matching classes
 _guide_lock  = threading.Lock()
 
+# student class name -> COCO class name (after lower-casing / removing spaces)
+_ALIASES = {
+    'aeroplane': 'airplane', 'motorbike': 'motorcycle', 'sofa': 'couch',
+    'tvmonitor': 'tv', 'television': 'tv', 'monitor': 'tv',
+}
 
-def _load_guide_bg(device_str):
-    global _guide_model
+
+def _norm(name):
+    n = str(name).lower().replace(' ', '').replace('_', '').replace('-', '')
+    return _ALIASES.get(n, n)
+
+
+def _load_guide_bg(device_str, student_names):
+    """
+    Load a pretrained YOLOv8 as a frozen TEACHER. Only classes whose name
+    exists in both the teacher (COCO) and your dataset are guided; the
+    rest are trained normally.
+    """
+    global _guide_model, _guide_map
     try:
-        if not os.path.exists(GUIDE_PT):
+        if not GUIDE_PT or not os.path.exists(GUIDE_PT):
             return
         os.environ['YOLO_VERBOSE'] = 'False'
-        logging.getLogger('ultralytics').setLevel(logging.CRITICAL)
         from ultralytics import YOLO as _U
-        _g = _U(GUIDE_PT)
-        device = torch.device(device_str)
-        _g.model.eval()
-        _g.model.to(device)
-        for p in _g.model.parameters():
+        g = _U(GUIDE_PT)
+        net = g.model.float().eval().to(torch.device(device_str))
+        for p in net.parameters():
             p.requires_grad_(False)
+
+        t_names = {_norm(v): int(k) for k, v in net.names.items()}
+        s_idx, t_idx = [], []
+        for i, n in enumerate(student_names):
+            if _norm(n) in t_names:
+                s_idx.append(i)
+                t_idx.append(t_names[_norm(n)])
+        if not s_idx:
+            print("  [guide] no matching class names with the teacher -> guide disabled")
+            return
         with _guide_lock:
-            _guide_model = _g.model
-    except Exception:
-        pass
+            _guide_model = net
+            _guide_map   = (torch.tensor(s_idx), torch.tensor(t_idx))
+        print("  [guide] YOLOv8 teacher ready: guiding " + str(len(s_idx)) +
+              "/" + str(len(student_names)) + " classes")
+    except Exception as e:
+        print("  [guide] disabled (" + type(e).__name__ + ": " + str(e)[:120] + ")")
 
 
 def _get_guide():
@@ -49,20 +76,43 @@ def _get_guide():
 
 
 def _guide_preds(guide, imgs, nc, device):
+    """
+    Run the frozen YOLOv8 teacher and return its class probabilities on our
+    three grids, remapped to OUR class order.
+
+    Returns (teacher_cls_list, class_mask) or None on any problem:
+        teacher_cls_list: 3 tensors (B, nc, H, W) in [0,1]
+        class_mask:       (nc,) bool - which of our classes have a teacher class
+    """
+    global _guide_model
     try:
         with torch.no_grad():
-            guide(imgs)
-        scales = [(80, 80), (40, 40), (20, 20)]
-        result = []
-        for H, W in scales:
+            out = guide(imgs.float())
+            y = out[0] if isinstance(out, (list, tuple)) else out    # (B, 4+Nt, A)
+            probs = y[:, 4:, :].float()                              # sigmoid class scores
+            Hs = [imgs.shape[2] // s for s in (8, 16, 32)]
+            Ws = [imgs.shape[3] // s for s in (8, 16, 32)]
+            sizes = [h * w for h, w in zip(Hs, Ws)]
+            if probs.shape[2] != sum(sizes):
+                raise RuntimeError("teacher output size mismatch")
+
+            s_idx, t_idx = _guide_map
             B = imgs.shape[0]
-            result.append((
-                torch.zeros(B, 4,  H, W, device=device),
-                torch.zeros(B, nc, H, W, device=device),
-                torch.zeros(B, 1,  H, W, device=device),
-            ))
-        return result
-    except Exception:
+            mask = torch.zeros(nc, dtype=torch.bool, device=device)
+            mask[s_idx.to(device)] = True
+
+            result, start = [], 0
+            for h, w, n in zip(Hs, Ws, sizes):
+                p = probs[:, :, start:start + n]                     # (B, Nt, h*w)
+                start += n
+                tc = torch.zeros(B, nc, n, device=device)
+                tc[:, s_idx.to(device)] = p[:, t_idx.to(device)]
+                result.append(tc.view(B, nc, h, w))
+        return result, mask
+    except Exception as e:
+        print("\n  [guide] turned off (" + type(e).__name__ + ": " + str(e)[:120] + ")")
+        with _guide_lock:
+            _guide_model = None
         return None
 
 
@@ -70,9 +120,6 @@ def train(args):
     device = torch.device(
         'cuda' if args.device == 'cuda' and torch.cuda.is_available() else 'cpu'
     )
-
-    t = threading.Thread(target=_load_guide_bg, args=(str(device),), daemon=True)
-    t.start()
 
     train_loader, nc, names = build_dataloader(
         args.data, split='train',
@@ -84,6 +131,9 @@ def train(args):
     )
 
     print("Classes (" + str(nc) + "): " + str(names))
+
+    # Load the YOLOv8 teacher in the background (needs class names)
+    threading.Thread(target=_load_guide_bg, args=(str(device), names), daemon=True).start()
 
     model = HybridNet(num_classes=nc).to(device)
 
