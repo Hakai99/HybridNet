@@ -69,76 +69,61 @@ def validate():
 
     # ── Metrics ─────────────────────────────────────
     from utils.metrics import MAPMetric
-    from utils.general import xywh2xyxy, nms
+    from utils.general import xywh2xyxy
+    from model.head import decode_scale
+    from torchvision.ops import batched_nms
+
+    STRIDES  = (8, 16, 32)
+    MAX_PRE  = 1000    # top-scoring candidates kept before NMS
+    MAX_DET  = 300     # detections kept per image
 
     metric = MAPMetric(num_classes=num_classes)
 
     print(f"Evaluating on {len(val_loader)} batches...\n")
 
     for batch_idx, (imgs, targets, _) in enumerate(val_loader):
-        imgs    = imgs.to(device)
-        targets = targets.to(device)
+        imgs = imgs.to(device)
 
-        # Forward
         predictions = model(imgs)
 
-        # Decode predictions per image
-        B = imgs.shape[0]
-        for img_idx in range(B):
-            # Get ground truth for this image
-            gt_mask    = targets[:, 0] == img_idx
-            gt         = targets[gt_mask]                      # (M, 6)
+        # Decode every scale with the SAME encoding the loss uses
+        per_scale = []
+        for (box_pred, cls_pred, ctr_pred), stride in zip(predictions, STRIDES):
+            B = box_pred.shape[0]
+            boxes = decode_scale(box_pred, stride, args.imgsz).reshape(B, -1, 4)   # cxcywh, normalized
+            probs = torch.sigmoid(cls_pred.float()) * torch.sigmoid(ctr_pred.float())   # (B,C,H,W)
+            probs = probs.permute(0, 2, 3, 1).reshape(B, -1, num_classes)             # (B,HW,C)
+            per_scale.append((boxes, probs))
+
+        boxes_all = torch.cat([p[0] for p in per_scale], dim=1)   # (B, N, 4)
+        probs_all = torch.cat([p[1] for p in per_scale], dim=1)   # (B, N, C)
+
+        for img_idx in range(imgs.shape[0]):
+            gt         = targets[targets[:, 0] == img_idx].cpu()
             gt_boxes   = xywh2xyxy(gt[:, 2:6]) if gt.shape[0] > 0 else torch.zeros(0, 4)
             gt_classes = gt[:, 1] if gt.shape[0] > 0 else torch.zeros(0)
 
-            # Gather predictions from all scales for this image
-            all_boxes, all_scores, all_classes = [], [], []
-
-            for box_pred, cls_pred, ctr_pred in predictions:
-                box_pred = torch.sigmoid(box_pred[img_idx])   # (4, H, W)
-                cls_pred = torch.sigmoid(cls_pred[img_idx])   # (C, H, W)
-                ctr_pred = torch.sigmoid(ctr_pred[img_idx])   # (1, H, W)
-
-                H, W = box_pred.shape[1], box_pred.shape[2]
-
-                # Score = class_prob * centerness
-                scores, cls_idx = (cls_pred * ctr_pred).max(dim=0)  # (H, W)
-                scores   = scores.view(-1)
-                cls_idx  = cls_idx.view(-1).float()
-                boxes_hw = box_pred.permute(1, 2, 0).reshape(-1, 4)
-
-                # Filter by conf
-                mask = scores > args.conf
-                if mask.sum() == 0:
-                    continue
-
-                all_boxes.append(boxes_hw[mask])
-                all_scores.append(scores[mask])
-                all_classes.append(cls_idx[mask])
-
-            if not all_boxes:
-                metric.update(
-                    torch.zeros(0, 4), torch.zeros(0), torch.zeros(0),
-                    gt_boxes.to(device), gt_classes.to(device)
-                )
+            scores, cls_idx = probs_all[img_idx].max(dim=1)       # best class per cell
+            keep = scores > args.conf
+            if keep.sum() == 0:
+                metric.update(torch.zeros(0, 4), torch.zeros(0), torch.zeros(0),
+                              gt_boxes, gt_classes)
                 continue
 
-            all_boxes   = torch.cat(all_boxes, dim=0)
-            all_scores  = torch.cat(all_scores, dim=0)
-            all_classes = torch.cat(all_classes, dim=0)
+            scores  = scores[keep]
+            cls_idx = cls_idx[keep]
+            boxes   = xywh2xyxy(boxes_all[img_idx][keep])
 
-            # Convert to xyxy for NMS
-            boxes_xyxy = xywh2xyxy(all_boxes)
+            if scores.numel() > MAX_PRE:
+                top = scores.topk(MAX_PRE).indices
+                scores, cls_idx, boxes = scores[top], cls_idx[top], boxes[top]
 
-            # NMS
-            keep = nms(boxes_xyxy, all_scores, args.iou)
-            boxes_xyxy  = boxes_xyxy[keep]
-            all_scores  = all_scores[keep]
-            all_classes = all_classes[keep]
+            # class-aware NMS
+            k = batched_nms(boxes, scores, cls_idx, args.iou)[:MAX_DET]
 
             metric.update(
-                boxes_xyxy, all_scores, all_classes,
-                gt_boxes.to(device), gt_classes.to(device)
+                boxes[k].cpu(), scores[k].cpu(), cls_idx[k].float().cpu(),
+                gt_boxes, gt_classes
             )
 
         print(f"\r  [{batch_idx+1}/{len(val_loader)}]", end='')
