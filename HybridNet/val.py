@@ -44,36 +44,28 @@ def validate():
     print(f"  Data   : {args.data}")
     print(f"  Device : {device}\n")
 
-    # ── Model ───────────────────────────────────────
-# ── Model ───────────────────────────────────────
-from model.hybridnet import build_model
-from utils.dataloader import build_dataloader
-
-# Load validation dataset and get actual class count
-val_loader, nc, class_names = build_dataloader(
-    args.data,
-    split='val',
-    img_size=args.imgsz,
-    batch_size=args.batch,
-    workers=0
-)
-
-num_classes = nc
-
-model = build_model(
-    num_classes=num_classes,
-    weights=args.weights,
-    device=str(device)
-)
-model.eval()
     # ── Dataloader ──────────────────────────────────
+    from model.hybridnet import build_model
     from utils.dataloader import build_dataloader
+
+    # Load validation dataset and get actual class count
     val_loader, nc, class_names = build_dataloader(
-        args.data, split='val',
+        args.data,
+        split='val',
         img_size=args.imgsz,
         batch_size=args.batch,
         workers=0
     )
+
+    num_classes = nc
+
+    # ── Model ───────────────────────────────────────
+    model = build_model(
+        num_classes=num_classes,
+        weights=args.weights,
+        device=str(device)
+    )
+    model.eval()
 
     # ── Metrics ─────────────────────────────────────
     from utils.metrics import MAPMetric
@@ -94,9 +86,9 @@ model.eval()
         B = imgs.shape[0]
         for img_idx in range(B):
             # Get ground truth for this image
-            gt_mask   = targets[:, 0] == img_idx
-            gt        = targets[gt_mask]                      # (M, 6)
-            gt_boxes  = xywh2xyxy(gt[:, 2:6]) if gt.shape[0] > 0 else torch.zeros(0, 4)
+            gt_mask    = targets[:, 0] == img_idx
+            gt         = targets[gt_mask]                      # (M, 6)
+            gt_boxes   = xywh2xyxy(gt[:, 2:6]) if gt.shape[0] > 0 else torch.zeros(0, 4)
             gt_classes = gt[:, 1] if gt.shape[0] > 0 else torch.zeros(0)
 
             # Gather predictions from all scales for this image
