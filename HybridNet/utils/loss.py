@@ -139,24 +139,28 @@ def build_targets(predictions, targets, device):
     return scale_targets
 
 
-def _soft_guidance(student_preds, soft_preds, device, temperature=4.0, lam=0.3):
-    total = torch.zeros(1, device=device)
-    count = 0
-    for (s_box, s_cls, s_ctr), (t_box, t_cls, t_ctr) in zip(student_preds, soft_preds):
-        B, C, H, W = s_cls.shape
-        s_flat = s_cls.permute(0,2,3,1).reshape(-1, C)
-        t_flat = t_cls.permute(0,2,3,1).reshape(-1, C).detach()
-        s_soft = F.log_softmax(s_flat / temperature, dim=-1)
-        t_soft = F.softmax(t_flat / temperature, dim=-1)
-        kd     = F.kl_div(s_soft, t_soft, reduction='batchmean') * (temperature ** 2)
+def _soft_guidance(student_preds, soft_preds, device, lam=0.5):
+    """
+    Distillation from a frozen YOLOv8 teacher (classification only).
 
-        s_ctr_flat = s_ctr.permute(0,2,3,1).reshape(-1, 1)
-        t_ctr_flat = t_ctr.permute(0,2,3,1).reshape(-1, 1).detach()
-        ctr_kd = F.mse_loss(torch.sigmoid(s_ctr_flat), torch.sigmoid(t_ctr_flat))
+    soft_preds = (teacher_cls_list, class_mask)
+        teacher_cls_list: per scale (B, nc, H, W) teacher probabilities
+        class_mask:       (nc,) which classes the teacher knows
 
-        total = total + kd + 0.5 * ctr_kd
+    The student's class logits are pulled toward the teacher's soft
+    probabilities with a sigmoid BCE (multi-label, same as the main cls loss).
+    Boxes and centerness are NOT distilled.
+    """
+    teacher_cls, class_mask = soft_preds
+    total, count = torch.zeros(1, device=device), 0
+    for (s_box, s_cls, s_ctr), t_cls in zip(student_preds, teacher_cls):
+        s = s_cls.float()[:, class_mask]            # (B, k, H, W)
+        t = t_cls.detach()[:, class_mask]
+        bce = F.binary_cross_entropy_with_logits(s, t, reduction='none')
+        # normalise by the amount of teacher "evidence" so the term stays
+        # comparable to the main focal loss
+        total = total + bce.sum() / t.sum().clamp(min=1.0)
         count += 1
-
     if count > 0:
         total = total / count
     return total * lam
