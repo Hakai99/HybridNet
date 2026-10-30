@@ -161,8 +161,11 @@ def build_model(num_classes, weights=None, device='cpu'):
         ckpt = torch.load(weights, map_location=device)
         # Support both raw state_dict and checkpoint dict
         state = ckpt.get('model_state', ckpt)
-        model.load_state_dict(state, strict=False)
+        missing, unexpected = model.load_state_dict(state, strict=False)
         print(f"Loaded weights from: {weights}")
+        if missing or unexpected:
+            print(f"  WARNING: {len(missing)} missing / {len(unexpected)} unexpected keys "
+                  f"(weights may not have loaded properly)")
 
     model = model.to(device)
     return model
