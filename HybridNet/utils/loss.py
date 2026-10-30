@@ -3,6 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+from model.head import decode_scale
+
+STRIDES = (8, 16, 32)
+
 
 def ciou_loss(pred_boxes, target_boxes, eps=1e-7):
     def xywh2xyxy(b):
@@ -51,11 +55,13 @@ def ciou_loss(pred_boxes, target_boxes, eps=1e-7):
     return (1 - ciou).mean()
 
 
-def focal_loss(pred, target, alpha=0.25, gamma=2.0):
+def focal_loss(pred, target, alpha=0.25, gamma=2.0, num_pos=1.0):
     bce   = F.binary_cross_entropy_with_logits(pred, target, reduction='none')
     p_t   = torch.exp(-bce)
     focal = alpha * (1 - p_t) ** gamma * bce
-    return focal.mean()
+    # normalize by number of positives (standard for focal loss);
+    # .mean() over all cells x classes makes the gradient vanishingly small
+    return focal.sum() / max(float(num_pos), 1.0)
 
 
 class UncertaintyWeighting(nn.Module):
@@ -157,8 +163,9 @@ def _soft_guidance(student_preds, soft_preds, device, temperature=4.0, lam=0.3):
 
 
 class HybridLoss(nn.Module):
-    def __init__(self, num_classes, box_weight=3.0, cls_weight=1.0, ctr_weight=1.0):
+    def __init__(self, num_classes, box_weight=3.0, cls_weight=1.0, ctr_weight=1.0, input_size=640):
         super().__init__()
+        self.input_size  = input_size
         self.num_classes = num_classes
         self.box_weight  = box_weight
         self.cls_weight  = cls_weight
@@ -180,8 +187,9 @@ class HybridLoss(nn.Module):
             num_pos += n_pos
 
             if n_pos > 0:
+                decoded = decode_scale(box_pred, STRIDES[i], self.input_size)  # (B,H,W,4)
                 l_box = ciou_loss(
-                    torch.sigmoid(box_pred.permute(0,2,3,1)[mask]),
+                    decoded[mask],
                     tgt['boxes'][mask]
                 ) * self.box_weight
             else:
@@ -189,7 +197,7 @@ class HybridLoss(nn.Module):
 
             cls_flat     = cls_pred.permute(0,2,3,1).reshape(-1, self.num_classes)
             tgt_cls_flat = tgt['classes'].reshape(-1, self.num_classes)
-            l_cls        = focal_loss(cls_flat, tgt_cls_flat) * self.cls_weight
+            l_cls        = focal_loss(cls_flat, tgt_cls_flat, num_pos=max(n_pos, 1)) * self.cls_weight
 
             ctr_flat     = ctr_pred.permute(0,2,3,1).reshape(-1, 1)
             tgt_ctr_flat = tgt['center'].reshape(-1, 1)
