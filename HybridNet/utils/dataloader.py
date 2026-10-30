@@ -137,4 +137,3 @@ def build_dataloader(yaml_path, split='train', img_size=640, batch_size=16, work
     )
 
     return loader, data['nc'], data['names']
-
