@@ -32,6 +32,37 @@ class ConvBNReLU6(nn.Module):
         return self.block(x)
 
 
+def decode_scale(box_pred, stride, input_size=640):
+    """
+    Decode raw box logits of ONE scale into normalized (cx, cy, w, h).
+    Shared by the loss, val.py and detect.py so training and inference
+    always use the SAME box encoding.
+
+        cx = (grid_x + sigmoid(t0)) / W      (offset inside the grid cell)
+        cy = (grid_y + sigmoid(t1)) / H
+        w  = exp(t2) * stride / input_size   (log-scale size)
+        h  = exp(t3) * stride / input_size
+
+    Args:
+        box_pred: (B, 4, H, W) raw logits
+    Returns:
+        (B, H, W, 4) normalized cx, cy, w, h
+    """
+    B, _, H, W = box_pred.shape
+    device = box_pred.device
+    grid_y, grid_x = torch.meshgrid(
+        torch.arange(H, device=device),
+        torch.arange(W, device=device),
+        indexing='ij'
+    )
+    box_pred = box_pred.float()
+    cx = (grid_x.unsqueeze(0) + torch.sigmoid(box_pred[:, 0])) / W
+    cy = (grid_y.unsqueeze(0) + torch.sigmoid(box_pred[:, 1])) / H
+    w  = torch.exp(box_pred[:, 2].clamp(max=6)) * stride / input_size
+    h  = torch.exp(box_pred[:, 3].clamp(max=6)) * stride / input_size
+    return torch.stack([cx, cy, w, h], dim=-1)
+
+
 # ─────────────────────────────────────────────
 # Single Scale Head
 # ─────────────────────────────────────────────
@@ -73,6 +104,8 @@ class ScaleHead(nn.Module):
         for m in [self.box_head, self.cls_head, self.ctr_head]:
             nn.init.normal_(m.weight, std=0.01)
             nn.init.constant_(m.bias, 0)
+        # Focal-loss prior: start with ~1% foreground probability
+        nn.init.constant_(self.cls_head.bias, -4.6)
 
     def forward(self, x):
         feat = self.tower(x)
@@ -160,23 +193,7 @@ class AnchorFreeHead(nn.Module):
             B, _, H, W = box_pred.shape
             device = box_pred.device
 
-            # Build grid of cell coordinates (same for every image in the batch)
-            grid_y, grid_x = torch.meshgrid(
-                torch.arange(H, device=device),
-                torch.arange(W, device=device),
-                indexing='ij'
-            )  # (H, W) each
-
-            # Center offset within the cell: sigmoid keeps it in [0,1] of one cell
-            cx = (grid_x.unsqueeze(0) + torch.sigmoid(box_pred[:, 0])) / W   # (B,H,W)
-            cy = (grid_y.unsqueeze(0) + torch.sigmoid(box_pred[:, 1])) / H   # (B,H,W)
-
-            # Width/height: exp() keeps positive, scaled by stride so scale
-            # differences between P3/P4/P5 are represented consistently
-            w = torch.exp(box_pred[:, 2].clamp(max=6)) * stride / input_size
-            h = torch.exp(box_pred[:, 3].clamp(max=6)) * stride / input_size
-
-            box_decoded = torch.stack([cx, cy, w, h], dim=-1)  # (B,H,W,4)
+            box_decoded = decode_scale(box_pred, stride, input_size)  # (B,H,W,4)
 
             cls_pred = torch.sigmoid(cls_pred)   # class probabilities
             ctr_pred = torch.sigmoid(ctr_pred)   # centerness score
