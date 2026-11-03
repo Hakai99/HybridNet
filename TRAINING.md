@@ -416,18 +416,19 @@ print("=" * 45)
 import os, subprocess
 os.chdir('/content/HybridNet/HybridNet')
 
-BEST_PT   = '/content/drive/MyDrive/HybridNet_runs/run_v1/hybridmain.pt'
-DATA_YAML = '/content/drive/MyDrive/hybrid_test/data.yaml'   # ← CHANGE THIS
+BEST_PT   = '/content/drive/MyDrive/HybridNet_runs/run_v1/hybridmain.pt'   # use your current run name
+DATA_YAML = '/content/drive/MyDrive/hybrid_test/data.yaml'
 
 if not os.path.exists(BEST_PT):
     print("hybridmain.pt not found!")
 else:
     proc = subprocess.Popen(
-        ['python', 'val.py', '--weights', BEST_PT, '--data', DATA_YAML, '--batch', '8'],
+        ['python', '-u', 'val.py', '--weights', BEST_PT, '--data', DATA_YAML,
+         '--batch', '8', '--conf', '0.01'],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, cwd='/content/HybridNet/HybridNet'
     )
-    for line in proc.stdout:
+    for line in iter(lambda: proc.stdout.read(1), ''):
         print(line, end='', flush=True)
     proc.wait()
 ```
